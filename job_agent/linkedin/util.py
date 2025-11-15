@@ -1,6 +1,6 @@
 
 import logging
-from linkedin_mcp_server.model import JobType
+from .model import JobType, ExperienceLevel
 
 
 def job_type_code(job_type_enum: JobType) -> str:
@@ -13,6 +13,17 @@ def job_type_code(job_type_enum: JobType) -> str:
     }.get(job_type_enum, "")
 
 
+def experience_level_code(experience_level_enum: ExperienceLevel) -> str:
+    return {
+        ExperienceLevel.INTERNSHIP: "1",
+        ExperienceLevel.ENTRY_LEVEL: "2",
+        ExperienceLevel.ASSOCIATE: "3",
+        ExperienceLevel.MID_SENIOR_LEVEL: "4",
+        ExperienceLevel.DIRECTOR: "5",
+        ExperienceLevel.EXECUTIVE: "6",
+        
+    }.get(experience_level_enum, "")
+    
 def create_logger(name: str):
     logger = logging.getLogger(f"JobSpy:{name}")
     logger.propagate = False

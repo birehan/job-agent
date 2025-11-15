@@ -22,10 +22,13 @@ classifiers = [
 dependencies = [
     "openai",
     "selenium",
+    "selenium-stealth",
     "beautifulsoup4",
     "gspread",
     "oauth2client",
-    "webdriver-manager"
+    "webdriver-manager",
+    "PyPDF2",
+    "pandas"
 ]
 
 [dependency-groups]

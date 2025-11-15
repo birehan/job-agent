@@ -179,7 +179,7 @@ class Country(Enum):
 
 
 class Location(BaseModel):
-    country: Country | str | None = None
+    country:  str | None = None
     city: Optional[str] = None
     state: Optional[str] = None
 
@@ -277,6 +277,16 @@ class Site(Enum):
 class SalarySource(Enum):
     DIRECT_DATA = "direct_data"
     DESCRIPTION = "description"
+    
+
+class ExperienceLevel(Enum):
+    INTERNSHIP = "internship"
+    ENTRY_LEVEL = "entry_level"
+    ASSOCIATE = "associate"
+    MID_SENIOR_LEVEL = "mid_senior_level"
+    DIRECTOR = "director"
+    EXECUTIVE = "executive"
+    
 
 
 class ScraperInput(BaseModel):
@@ -286,6 +296,7 @@ class ScraperInput(BaseModel):
 
     location: str | None = None
     country: Country | None = Country.USA
+    experience_level: list[ExperienceLevel]  = []
     distance: int | None = None
     is_remote: bool = False
     job_type: JobType | None = None

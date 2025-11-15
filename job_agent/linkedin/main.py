@@ -15,10 +15,13 @@ from selenium.common.exceptions import NoSuchElementException, StaleElementRefer
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 import re
 from datetime import datetime, timedelta
 from urllib.parse import unquote
+from .model import Country, JobType, ScraperInput, Site, JobResponse
+
+from .job_search import JobSearch
 logger = logging.getLogger(__name__)
 
 # --- Configuration ---
@@ -30,7 +33,6 @@ if not OPENAI_API_KEY:
     raise Exception("OPENAI_API_KEY environment variable not set.")
 
 # 2. Your Google Sheets credentials file (from Google Cloud Console)
-GOOGLE_CREDS_JSON = "credentials.json"
 
 # 3. The exact name of the Google Sheet you created and shared
 GOOGLE_SHEET_NAME = "My AI Job Tracker"
@@ -91,7 +93,7 @@ def create_chrome_options() -> Options:
 
  
     # if config.chrome.headless:
-    chrome_options.add_argument("--headless=new")
+    # chrome_options.add_argument("--headless=new")
 
     # Add essential options for stability
     chrome_options.add_argument("--no-sandbox")
@@ -342,19 +344,21 @@ def parse_relative_date(date_str):
     
     return None # Fallback if format is unexpected
 
+
+
+        
 class JobScraperAgent:
     """
     An AI agent that scrapes job sites, analyzes job descriptions against a CV,
     and logs suitable jobs to a Google Sheet.
     """
-    def __init__(self, cv_summary, creds_file, sheet_name):
+    def __init__(self, cv_summary=MY_CV_SUMMARY, sheet_name=GOOGLE_SHEET_NAME):
         self.cv_summary = cv_summary
         self.openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
         self.driver = get_or_create_driver(os.environ.get("LINKEDIN_COOKIE", ""))
-        
+        self.wait = WebDriverWait(self.driver, 10)
 
-        self.wait = WebDriverWait(self.driver, 10) # 10 second timeout
-        self.sheet = self._setup_google_sheets(creds_file, sheet_name)
+        self.sheet = self._setup_google_sheets(sheet_name)
         self._setup_sheet_headers()
 
     def _setup_driver(self):
@@ -390,7 +394,7 @@ class JobScraperAgent:
             logging.error("Please ensure you have Google Chrome browser *itself* installed on this machine.")
             raise
         
-    def _setup_google_sheets(self, creds_file, sheet_name):
+    def _setup_google_sheets(self, sheet_name):
         """Connects to Google Sheets API and opens the correct sheet."""
         try:
             logging.info(f"Connecting to Google Sheets: {sheet_name}...")
@@ -783,13 +787,13 @@ class JobScraperAgent:
             try:
                 self.wait.until(EC.presence_of_element_located((By.XPATH, "//*[@data-testid='expandable-text-box']")))
                 time.sleep(2) 
-            except Exeception as e:
+            except Exception as e:
                 logging.error(f"Page took too long to load: {e}")
             html_source = self.driver.page_source
             soup = BeautifulSoup(html_source, 'html.parser')
 
             full_title = soup.title.string if soup.title else ""
-            if "|" in full_title:
+            if full_title and "|" in full_title :
                 job_title = full_title.split("|")[0].strip()
                 company_name = full_title.split('|')[1].strip()
             else:
@@ -868,24 +872,42 @@ class JobScraperAgent:
             logging.error(f"Error parsing Job ID {job_id}: {e}")
             return None
 
+    
+    def find_jobs(self, scraper_input: ScraperInput) -> JobResponse:
+        try:
+            job_search = JobSearch(driver=self.driver, close_on_complete=False, scrape=False)
+            jobs = job_search.search(scraper_input)
+            return jobs
+        except Exception as e:
+            logging.error(f"find_jobs error: {e}")            
+            return JobResponse(jobs=[])
 
 
 if __name__ == "__main__":
-   
-
-    # We still run, but LinkedIn might fail
     agent = JobScraperAgent(
-        cv_summary=MY_CV_SUMMARY,
-        creds_file=GOOGLE_CREDS_JSON,
-        sheet_name=GOOGLE_SHEET_NAME
     )
+    
+    scrape_input = ScraperInput(
+                site_type=[Site.LINKEDIN],
+                search_term='AI Engineer',
+                country = Country.WORLDWIDE,
+                location='worldwide',
+                is_remote=True,
+                easy_apply=False,
+                hours_old=24,
+                results_wanted=100
+    )
+    
+    jobs = agent.find_jobs(scrape_input)
+    
     try:
-        ids = [4339984387, 4337975102, 4283008498, 4289029194, 4333258417]
         results = []
-        for job_id in ids:
-            result = agent.get_job_details_by_id(job_id)
+        not_easy_apply_jobs = []
+        for job  in jobs:
+            result = agent.get_job_details_by_id(job.id)
             results.append(result)
-            print(f"detail of job {job_id} is: {result}")
+            if result['apply_type'] != 'Easy Apply':
+                not_easy_apply_jobs.append(result)
         breakpoint()
     except Exception as e:
         breakpoint()
