@@ -358,9 +358,72 @@ class JobScraperAgent:
         self.driver = get_or_create_driver(os.environ.get("LINKEDIN_COOKIE", ""))
         self.wait = WebDriverWait(self.driver, 10)
 
-        self.sheet = self._setup_google_sheets(sheet_name)
-        self._setup_sheet_headers()
+    
+    def scrape_company_location_stats(self, company_url: str) -> Dict[str, int]:
+        logging.info(f"Starting location stats scrape for: {company_url}")
+        
+        base_url_match = re.search(
+            r'^(https?://(?:www\.)?linkedin\.com/company/[^/]+)', 
+            company_url
+        )
 
+        if not base_url_match:
+            logging.error(f"Invalid company URL format: {company_url}. Expected '.../company/company-name/'.")
+            return {}
+            
+        base_company_url = base_url_match.group(1)
+        
+        # Ensure it has a trailing slash for consistency
+        if not base_company_url.endswith('/'):
+            base_company_url += '/'
+            
+        people_url = f"{base_company_url}people/"
+        # --- END OF FIX ---
+
+        locations_data: Dict[str, int] = {}
+
+        try:
+            # 2. Navigate to the 'people' page
+            self.driver.get(people_url)
+            logging.info(f"Navigated to: {people_url}")
+            time.sleep(10)
+            
+            # insight-container
+            html_source = self.driver.page_source
+            soup = BeautifulSoup(html_source, 'html.parser')
+            time.sleep(3)
+            location_container = soup.find('div', class_='org-people-bar-graph-module__geo-region')
+
+            # 3. Create an empty list to store the results
+
+            # 4. Check if the container was found before trying to search inside it
+            if location_container:
+                # 5. Now, find all the <button> elements *only within that container*
+                location_entries = location_container.find_all(
+                    'button', class_='org-people-bar-graph-element'
+                )
+
+                # 6. Loop through each entry found
+                for entry in location_entries:
+                    count_tag = entry.find('strong')
+                    location_tag = entry.find('span', class_='org-people-bar-graph-element__category')
+
+                    if count_tag and location_tag:
+                        count = count_tag.text.strip()
+                        location = location_tag.text.strip()
+                        
+                        locations_data[location] = int(count)
+            
+            else:
+                logger.error("Error: Could not find the location container.")
+
+            # 7. Print the final list
+            return locations_data
+            
+        except Exception as e:
+            logging.error(f"An unexpected error occurred during location scraping: {e}")
+            return {}
+        
     def _setup_driver(self):
         """Initializes a (now VISIBLE and STEALTH) Chrome WebDriver."""
         logging.info("Setting up VISIBLE and STEALTH Chrome driver...")
@@ -394,46 +457,6 @@ class JobScraperAgent:
             logging.error("Please ensure you have Google Chrome browser *itself* installed on this machine.")
             raise
         
-    def _setup_google_sheets(self, sheet_name):
-        """Connects to Google Sheets API and opens the correct sheet."""
-        try:
-            logging.info(f"Connecting to Google Sheets: {sheet_name}...")
-            from google.oauth2 import service_account 
-            service_account_info = {
-                "project_id": os.environ.get("GOOGLE_CLOUD_PROJECT_ID", ""),
-                "private_key": os.environ.get("GOOGLE_CLOUD_PRIVATE_KEY", ""),
-                "client_email": os.environ.get("GOOGLE_CLOUD_CLIENT_EMAIL", ""),
-                "token_uri": "https://oauth2.googleapis.com/token",
-            }
-            scopes = [
-                "https://www.googleapis.com/auth/spreadsheets",
-                "https://www.googleapis.com/auth/drive"
-            ]
-
-            creds = service_account.Credentials.from_service_account_info(service_account_info, scopes=scopes)
-            # gc = gspread.service_account(creds)
-            gc = gspread.authorize(creds)
-            sh = gc.open(sheet_name)
-            worksheet = sh.sheet1
-            return worksheet
-        except gspread.exceptions.SpreadsheetNotFound:
-            logging.error(f"Spreadsheet '{sheet_name}' not found.")
-            logging.error("Did you create it and share it with the service account email?")
-            raise
-        except Exception as e:
-            logging.error(f"Failed to connect to Google Sheets: {e}")
-            raise
-
-    def _setup_sheet_headers(self):
-        """Adds headers to the Google Sheet if it's empty."""
-        try:
-            if not self.sheet.acell('A1').value:
-                logging.info("Setting up sheet headers...")
-                headers = ["Timestamp", "Job Title", "Company", "Job URL", "External Apply Link", "Fit (Yes/No)", "Confidence", "Reasoning", "Missing Keywords"]
-                self.sheet.append_row(headers)
-        except Exception as e:
-            logging.warning(f"Could not set up sheet headers: {e}")
-
     def _load_linkedin_cookie(self):
         """Loads a LinkedIn session cookie from a file to bypass login."""
         if not os.path.exists(LINKEDIN_COOKIE_FILE):
@@ -534,247 +557,12 @@ class JobScraperAgent:
             logging.error(f"Error parsing HTML: {e}")
             return ""
 
-    def check_job_fit(self, job_description_text):
-        """Uses GPT-4o-mini to analyze the job description against the CV."""
-        if not job_description_text:
-            return None
-
-        system_prompt = """
-        You are an expert HR recruitment assistant. Your task is to analyze a job description (JD)
-        against a candidate's CV summary. Respond ONLY with a valid JSON object with the
-        following structure:
-        {
-          "is_fit": boolean,
-          "reason": "A brief 1-2 sentence explanation for your decision.",
-          "confidence_score": float (0.0 to 1.0),
-          "missing_keywords": ["list", "of", "key", "skills", "from", "JD", "not", "in", "CV"]
-        }
-        """
-        
-        user_prompt = f"""
-        Candidate CV Summary:
-        ---
-        {self.cv_summary}
-        ---
-        Job Description:
-        ---
-        {job_description_text[:4000]}
-        ---
-        Analyze the fit and provide your JSON response.
-        """
-
-        try:
-            response = self.openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                response_format={"type": "json_object"}
-            )
-            
-            result_json = response.choices[0].message.content
-            return json.loads(result_json)
-        
-        except json.JSONDecodeError as e:
-            logging.error(f"Failed to parse JSON response from AI: {e}\nResponse: {result_json}")
-            return None
-        except Exception as e:
-            logging.error(f"Error calling OpenAI API: {e}")
-            return None
-
-    def track_in_google_sheets(self, job_data, analysis):
-        """Logs the job and its analysis to the Google Sheet."""
-        try:
-            timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
-            is_fit_str = "Yes" if analysis.get('is_fit', False) else "No"
-            confidence = analysis.get('confidence_score', 'N/A')
-            reason = analysis.get('reason', 'N/A')
-            missing_keywords = ", ".join(analysis.get('missing_keywords', []))
-            
-            row = [
-                timestamp,
-                job_data.get('title', 'N/A'),
-                job_data.get('company', 'N/A'),
-                job_data.get('url', 'N/A'),
-                job_data.get('external_apply_link', 'N/A'),
-                is_fit_str,
-                confidence,
-                reason,
-                missing_keywords
-            ]
-            
-            self.sheet.append_row(row)
-            logging.info(f"Logged job to Google Sheets: {job_data.get('title')}")
-
-        except Exception as e:
-            logging.error(f"Failed to log to Google Sheets: {e}")
-
-    def scrape_site(self, site_config):
-        """Scrapes a single site based on its configuration."""
-        name = site_config["name"]
-        search_url = site_config["search_url"]
-        job_card_selector = site_config["job_card_selector"]
-        job_link_selector_within_card = site_config["job_link_selector_within_card"]
-        company_name_selector = site_config["company_name_selector"]
-        job_desc_selector = site_config["job_description_selector"]
-
-        logging.info(f"--- Starting scrape for {name} ---")
-
-        # --- NEW: Load cookies if it's LinkedIn ---
-        if name == "LinkedIn":
-            self._load_linkedin_cookie()
-            # self._check_linkedin_login() # <-- ADD THIS LINE
-        # --- END NEW ---
-        
-        search_page_html = self._get_page_and_wait(search_url, job_card_selector)
-        if not search_page_html:
-            logging.error(f"Failed to get search page for {name} (or element '{job_card_selector}' not found). Skipping.")
-            return
-
-        job_links = []
-        try:
-            job_card_elements = self.driver.find_elements(By.CSS_SELECTOR, job_card_selector)
-            logging.info(f"Found {len(job_card_elements)} job cards on {name}.")
-            
-            for card in job_card_elements:
-                try:
-                    link_elem = card.find_element(By.CSS_SELECTOR, job_link_selector_within_card)
-                    company_elem = card.find_element(By.CSS_SELECTOR, company_name_selector)
-                    
-                    href = link_elem.get_attribute('href')
-                    title = link_elem.text
-                    company = company_elem.text
-                    
-                    if href:
-                        job_links.append({"url": href, "title": title, "company": company})
-                except StaleElementReferenceException:
-                    continue
-                except NoSuchElementException:
-                    logging.warning("Could not find link or company in job card. Skipping card.")
-                    continue
-            
-            for job in job_links[:5]: # Limit to first 5
-                job_url = job['url']
-                job_title = job['title']
-                company_name = job['company']
-                
-                logging.info(f"Scraping job: {job_title} at {company_name} ({job_url})")
-                
-                job_page_html = self._get_page_and_wait(job_url, job_desc_selector)
-                if not job_page_html:
-                    logging.warning(f"Failed to load job page or find description '{job_desc_selector}'. Skipping.")
-                    continue
-                
-                job_text = self._extract_text_content(job_page_html, job_desc_selector)
-                
-                job_data_for_sheet = {
-                    "url": job_url,
-                    "title": job_title,
-                    "company": company_name,
-                    "external_apply_link": "N/A"
-                }
-                
-                main_window = self.driver.current_window_handle
-                
-                
-                # --- MODIFIED: Robust LinkedIn "Apply" button logic ---
-                if name == "LinkedIn":
-                    try:
-                        # Composite selector for logged-in AND public buttons
-                        apply_button_selector = (
-                            "div.jobs-apply-button--top-card button.jobs-apply-button, "  # Logged-in
-                            "button.top-card-layout__cta, "                               # Public page main
-                            "button#topbar-apply"                                         # Public page top-bar
-                        )
-                        
-                        top_apply_button = self.wait.until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, apply_button_selector))
-                        )
-                        
-                        button_text = top_apply_button.text
-                        logging.info(f"Found apply button with text: '{button_text}'")
-
-                        # Check 1: Skip "Easy Apply"
-                        if "Easy Apply" in button_text:
-                            logging.info(f"Skipping Easy Apply job: {job_title}")
-                            continue
-
-                        # Check 2: Skip "Sign in to Apply" Modals
-                        data_modal = top_apply_button.get_attribute("data-modal")
-                        if data_modal == "apply-sign-up-modal":
-                            logging.warning(f"Skipping job: '{job_title}' (requires sign-in to apply).")
-                            continue
-
-                        # If it's not Easy Apply or Sign-in, it's an EXTERNAL link
-                        clickable_button = self.wait.until(
-                            EC.element_to_be_clickable((By.CSS_SELECTOR, apply_button_selector))
-                        )
-                        clickable_button.click()
-                        
-                        self.wait.until(EC.number_of_windows_to_be(2))
-                        
-                        if len(self.driver.window_handles) > 1:
-                            new_window = [handle for handle in self.driver.window_handles if handle != main_window][0]
-                            self.driver.switch_to.window(new_window)
-                            
-                            time.sleep(1) # Give new page a second
-                            external_apply_link = self.driver.current_url
-
-                            if "linkedin.com/login" in external_apply_link or "linkedin.com/signup" in external_apply_link:
-                                 logging.warning(f"Clicked 'Apply' but was redirected to sign-in page. Skipping.")
-                                 job_data_for_sheet["external_apply_link"] = "N/A (Sign-in Required)"
-                            else:
-                                job_data_for_sheet["external_apply_link"] = external_apply_link
-                                logging.info(f"Found external link: {external_apply_link}")
-                            
-                            self.driver.close()
-                            self.driver.switch_to.window(main_window)
-                        else:
-                            logging.warning("Clicked 'Apply' but no new tab opened.")
-
-                    except TimeoutException:
-                        logging.warning(f"Timeout waiting for 'Apply' button for {job_title}.")
-                    except NoSuchElementException:
-                        logging.warning(f"Could not find any 'Apply' button for {job_title}.")
-                    except Exception as e:
-                        logging.error(f"Error during apply button click for {job_title}: {e}")
-                        if self.driver.current_window_handle != main_window:
-                            try:
-                                self.driver.close()
-                                self.driver.switch_to.window(main_window)
-                            except:
-                                self.driver.switch_to.window(main_window)
-                
-                analysis = self.check_job_fit(job_text)
-                
-                if analysis:
-                    logging.info(f"Analysis for {job_title}: Fit: {analysis.get('is_fit')}, Confidence: {analysis.get('confidence_score')}")
-                    if analysis.get('is_fit'):
-                        self.track_in_google_sheets(job_data_for_sheet, analysis)
-                
-                time.sleep(3) # Be a good citizen
-
-        except NoSuchElementException:
-            logging.error(f"CRITICAL: CSS selector '{job_card_selector}' not found on {name}.")
-            logging.error("This site's layout has changed. Please update the selector in JOB_SITES_CONFIG.")
-        except Exception as e:
-            logging.error(f"An error occurred while scraping {name}: {e}")
-
-    def run(self, site_configs):
-        """Runs the scraper agent for all configured sites."""
-        logging.info("Starting AI Job Scraper Agent...")
-        for config in site_configs:
-            self.scrape_site(config)
-        logging.info("All sites scraped.")
-
     def close(self):
         """Closes the browser session."""
         logging.info("Shutting down driver...")
         if self.driver:
             self.driver.quit()
 
-    
     def get_job_details_by_id(self, job_id):
         """
         Navigates directly to a specific job ID and extracts detailed metadata.
@@ -903,7 +691,7 @@ if __name__ == "__main__":
     try:
         results = []
         not_easy_apply_jobs = []
-        for job  in jobs:
+        for job  in jobs.jobs:
             result = agent.get_job_details_by_id(job.id)
             results.append(result)
             if result['apply_type'] != 'Easy Apply':
