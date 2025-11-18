@@ -1,6 +1,9 @@
 name: Run AI Linkedin Job Scraper
 
 on:
+  push:
+      branches:
+        - main
   schedule:
     # Runs at minute 0 past hour 0 and 12 (Every 12 hours)
     - cron: '0 0,12 * * *'
