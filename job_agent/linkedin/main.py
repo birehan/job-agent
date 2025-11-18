@@ -19,9 +19,9 @@ from typing import Any, Dict, Optional, List
 import re
 from datetime import datetime, timedelta
 from urllib.parse import unquote
-from .model import Country, JobType, ScraperInput, Site, JobResponse
+from job_agent.linkedin.model import Country, JobType, ScraperInput, Site, JobResponse
 
-from .job_search import JobSearch
+from job_agent.linkedin.job_search import JobSearch
 logger = logging.getLogger(__name__)
 
 # --- Configuration ---
@@ -93,7 +93,7 @@ def create_chrome_options() -> Options:
 
  
     # if config.chrome.headless:
-    # chrome_options.add_argument("--headless=new")
+    chrome_options.add_argument("--headless=new")
 
     # Add essential options for stability
     chrome_options.add_argument("--no-sandbox")
@@ -423,39 +423,6 @@ class JobScraperAgent:
         except Exception as e:
             logging.error(f"An unexpected error occurred during location scraping: {e}")
             return {}
-        
-    def _setup_driver(self):
-        """Initializes a (now VISIBLE and STEALTH) Chrome WebDriver."""
-        logging.info("Setting up VISIBLE and STEALTH Chrome driver...")
-        chrome_options = Options()
-        
-        # --- FIX: We've commented this line out to make the browser visible ---
-        # chrome_options.add_argument("--headless") 
-        
-        # --- NEW: A more modern user agent ---
-        chrome_options.add_argument(
-            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-        )
-        
-        # --- NEW: This is the magic! ---
-        # Disables the "Chrome is being controlled by automated test software" infobar
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        # Disables the automation extension
-        chrome_options.add_experimental_option('useAutomationExtension', False)
-        
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--window-size=1920,1200")
-        
-        try:
-            service = Service(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=chrome_options)
-            return driver
-        except Exception as e:
-            logging.error(f"Failed to initialize Selenium WebDriver: {e}")
-            logging.error("Please ensure you have Google Chrome browser *itself* installed on this machine.")
-            raise
         
     def _load_linkedin_cookie(self):
         """Loads a LinkedIn session cookie from a file to bypass login."""
