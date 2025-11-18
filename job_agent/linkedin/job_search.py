@@ -264,7 +264,7 @@ class JobSearch(Scraper):
                 jobs_on_page = 0
                 self.driver.get(search_url)
                 sleep(10)
-                wait = WebDriverWait(self.driver, 15)
+                wait = WebDriverWait(self.driver, 10)
 
                 # 1. Find the scrollable container
                 scrollable_container_selector = (

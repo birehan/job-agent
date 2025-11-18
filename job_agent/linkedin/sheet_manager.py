@@ -2,8 +2,11 @@ import gspread
 import logging
 import os
 from google.oauth2 import service_account
-from typing import List, Dict, Any, Optional
-
+from typing import List, Dict, Any, Optional, Tuple
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
+import pypdf
+import io
 # Set up a logger for this module
 logger = logging.getLogger(__name__)
 
@@ -22,9 +25,13 @@ class GoogleSheetManager:
         """
         try:
             logger.info(f"Authenticating with Google Sheets...")
-            self.client = self._authenticate()
+            self.client, self.credentials = self._authenticate()
+            
             logger.info(f"Opening spreadsheet: {spreadsheet_name}...")
             self.spreadsheet = self.client.open(spreadsheet_name)
+            
+            self.drive_service = build('drive', 'v3', credentials=self.credentials)
+            
             logger.info("Successfully connected to Google Spreadsheet.")
         except gspread.exceptions.SpreadsheetNotFound:
             logger.error(f"Spreadsheet '{spreadsheet_name}' not found.")
@@ -34,7 +41,7 @@ class GoogleSheetManager:
             logger.error(f"Failed to initialize GoogleSheetManager: {e}")
             raise
 
-    def _authenticate(self) -> gspread.Client:
+    def _authenticate(self) -> Tuple[gspread.Client, service_account.Credentials]:
         """
         Handles the authentication flow using environment variables.
         (This logic is moved directly from your JobScraperAgent)
@@ -60,8 +67,81 @@ class GoogleSheetManager:
         creds = service_account.Credentials.from_service_account_info(
             service_account_info, scopes=scopes
         )
-        return gspread.authorize(creds)
+        return gspread.authorize(creds), creds
 
+    
+    def get_file_id_by_name(self, filename: str) -> Optional[str]:
+        """
+        Helper to find a file ID given its name. 
+        Returns the ID of the first match found.
+        """
+        try:
+            # Query to find file by name, ensuring it's not in the trash
+            query = f"name = '{filename}' and trashed = false"
+            results = self.drive_service.files().list(
+                q=query, pageSize=1, fields="files(id, name)"
+            ).execute()
+            items = results.get('files', [])
+            
+            if not items:
+                logger.warning(f"No file found with name '{filename}'")
+                return None
+            
+            return items[0]['id']
+        except Exception as e:
+            logger.error(f"Error searching for file '{filename}': {e}")
+            return None
+
+    def extract_text_from_drive_pdf(self, file_identifier: str, is_file_id: bool = False) -> str:
+        """
+        Downloads a PDF from Google Drive and extracts its text.
+
+        Args:
+            file_identifier (str): The File ID (e.g., '1A2b3C...') or the File Name (e.g., 'resume.pdf').
+            is_file_id (bool): Set to True if passing an ID, False if passing a filename.
+
+        Returns:
+            str: The extracted text content.
+        """
+        file_id = file_identifier
+
+        # If a name was passed, resolve it to an ID first
+        if not is_file_id:
+            logger.info(f"Looking up ID for filename: {file_identifier}")
+            found_id = self.get_file_id_by_name(file_identifier)
+            if not found_id:
+                return ""
+            file_id = found_id
+
+        try:
+            logger.info(f"Downloading file ID: {file_id}...")
+            request = self.drive_service.files().get_media(fileId=file_id)
+            
+            # Create an in-memory buffer
+            file_stream = io.BytesIO()
+            downloader = MediaIoBaseDownload(file_stream, request)
+            
+            done = False
+            while done is False:
+                status, done = downloader.next_chunk()
+                # logger.info(f"Download {int(status.progress() * 100)}%.")
+
+            # Reset stream position to the beginning for reading
+            file_stream.seek(0)
+
+            logger.info("Extracting text from PDF...")
+            reader = pypdf.PdfReader(file_stream)
+            full_text = []
+            
+            for page in reader.pages:
+                full_text.append(page.extract_text())
+            
+            return "\n".join(full_text)
+
+        except Exception as e:
+            logger.error(f"Failed to extract text from Drive file: {e}")
+            return ""
+        
     def _get_or_create_worksheet(self, tab_name: str) -> gspread.Worksheet:
         """
         Gets a worksheet by its tab name. If it doesn't exist, creates it.
@@ -144,7 +224,7 @@ if __name__ == "__main__":
     try:
         # 3. Initialize the manager
         manager = GoogleSheetManager(SHEET_FILE_NAME)
-
+        pdf_text = manager.extract_text_from_drive_pdf("resume.pdf", is_file_id=False)
         # 4. Define headers and data for a 'Jobs' tab
         jobs_tab = "AI Jobs"
         job_headers = ["Timestamp", "Job Title", "Company", "Job URL"]

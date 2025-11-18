@@ -573,39 +573,75 @@ class JobScraperAgent:
         try:
             self.driver.get(url)
             try:
+                # Wait for the description or the job header to load
                 self.wait.until(EC.presence_of_element_located((By.XPATH, "//*[@data-testid='expandable-text-box']")))
                 time.sleep(2) 
             except Exception as e:
                 logging.error(f"Page took too long to load: {e}")
+            
             html_source = self.driver.page_source
             soup = BeautifulSoup(html_source, 'html.parser')
 
-            full_title = soup.title.string if soup.title else ""
-            if full_title and "|" in full_title :
-                job_title = full_title.split("|")[0].strip()
-                company_name = full_title.split('|')[1].strip()
-            else:
-                job_title = full_title
-                company_name = "N/A"
+            # --- 1. EXTRACT TITLE ---
+            # Ideally, get the H1 directly rather than the page title tag
+            h1_tag = soup.find('h1')
+            job_title = h1_tag.get_text(strip=True) if h1_tag else "N/A"
+            
+            # Fallback to title tag if H1 fails
+            if job_title == "N/A" and soup.title:
+                job_title = soup.title.string and soup.title.string.split("|")[0].strip()
 
-            main_content = soup.find('main')
-            company_link_tag = main_content.find('a', href=re.compile(r'/company/')) if main_content else None
-            company_linkedin_url = company_link_tag['href'] if company_link_tag else "N/A"
+            # --- 2. EXTRACT COMPANY NAME & URL (FIXED) ---
+            company_name = "N/A"
+            company_linkedin_url = "N/A"
 
+            # Find the anchor tag containing '/company/' in the href
+            # We iterate to find the one that actually has text (the name), skipping the logo link if separate
+            company_links = soup.find_all('a', href=re.compile(r'/company/'))
+            
+            for link in company_links:
+                link_text = link.get_text(strip=True)
+                # We prioritize the link that has text content (e.g., "Crossing Hurdles")
+                if link_text:
+                    company_name = link_text
+                    company_linkedin_url = link['href']
+                    break
+            
+            # If we found a link but it had no text (just a logo), try to grab the URL at least
+            if company_linkedin_url == "N/A" and company_links:
+                company_linkedin_url = company_links[0]['href']
+
+            # --- 3. EXTRACT DESCRIPTION ---
             desc_tag = soup.find(attrs={"data-testid": "expandable-text-box"})
+            if not desc_tag:
+                # Fallback for different page structures
+                desc_tag = soup.find(id="job-details")
+            
             description = desc_tag.get_text(separator="\n").strip() if desc_tag else "N/A"
 
+            # --- 4. METADATA (Posted date, Applicants) ---
             metadata_text = ""
+            main_content = soup.find('main')
             if main_content:
-                p_tags = main_content.find_all('p')
-                for p in p_tags:
-                    if "ago" in p.get_text():
-                        metadata_text = p.get_text()
-                        break
+                # Look for the list of job insights (often styled as <li> or specific classes)
+                # Broad approach: grab text from the top card area
+                top_card = soup.find('div', class_=lambda x: x and 'top-card' in x)
+                if top_card:
+                    metadata_text = top_card.get_text(separator=" · ")
+                else:
+                    # Fallback to your original method
+                    p_tags = main_content.find_all('p')
+                    for p in p_tags:
+                        if "ago" in p.get_text():
+                            metadata_text = p.get_text()
+                            break
 
-            parts = metadata_text.split('·')
+            # Parse metadata text
             posted_date_str = "N/A"
             applicants_count = 0
+            
+            # Normalize text to split easier
+            parts = metadata_text.replace('\n', ' ').split('·')
 
             for part in parts:
                 part = part.strip()
@@ -615,9 +651,11 @@ class JobScraperAgent:
                     numbers = re.findall(r'\d+', part)
                     applicants_count = int(numbers[0]) if numbers else 0
 
-            posted_date = parse_relative_date(posted_date_str)
+            posted_date = parse_relative_date(posted_date_str) # Ensure this helper function exists in your class
+
+            # --- 5. APPLY BUTTON ---
             job_application_url = "N/A"
-            apply_type = "Easy Apply" # Default
+            apply_type = "Easy Apply" 
 
             apply_btn = soup.find(attrs={"data-view-name": "job-apply-button"})
 
@@ -629,8 +667,10 @@ class JobScraperAgent:
                     job_application_url = raw_url
                 else:
                     apply_type = "External Apply"
+                    # LinkedIn wraps external URLs, try to clean it
                     if "url=" in raw_url:
                         try:
+                            # You need to import unquote: from urllib.parse import unquote
                             job_application_url = unquote(raw_url.split("url=")[1].split("&")[0])
                         except:
                             job_application_url = raw_url
@@ -659,6 +699,103 @@ class JobScraperAgent:
         except Exception as e:
             logging.error(f"Error parsing Job ID {job_id}: {e}")
             return None
+        
+    # def get_job_details_by_id(self, job_id):
+    #     """
+    #     Navigates directly to a specific job ID and extracts detailed metadata.
+    #     """
+    #     url = f"https://www.linkedin.com/jobs/view/{job_id}/"
+    #     logging.info(f"Fetching details for Job ID: {job_id}...")
+
+    #     try:
+    #         self.driver.get(url)
+    #         try:
+    #             self.wait.until(EC.presence_of_element_located((By.XPATH, "//*[@data-testid='expandable-text-box']")))
+    #             time.sleep(2) 
+    #         except Exception as e:
+    #             logging.error(f"Page took too long to load: {e}")
+    #         html_source = self.driver.page_source
+    #         soup = BeautifulSoup(html_source, 'html.parser')
+
+    #         full_title = soup.title.string if soup.title else ""
+    #         if full_title and "|" in full_title :
+    #             job_title = full_title.split("|")[0].strip()
+    #             company_name = full_title.split('|')[1].strip()
+    #         else:
+    #             job_title = full_title
+    #             company_name = "N/A"
+
+    #         main_content = soup.find('main')
+    #         company_link_tag = main_content.find('a', href=re.compile(r'/company/')) if main_content else None
+    #         company_linkedin_url = company_link_tag['href'] if company_link_tag else "N/A"
+
+    #         desc_tag = soup.find(attrs={"data-testid": "expandable-text-box"})
+    #         description = desc_tag.get_text(separator="\n").strip() if desc_tag else "N/A"
+
+    #         metadata_text = ""
+    #         if main_content:
+    #             p_tags = main_content.find_all('p')
+    #             for p in p_tags:
+    #                 if "ago" in p.get_text():
+    #                     metadata_text = p.get_text()
+    #                     break
+
+    #         parts = metadata_text.split('·')
+    #         posted_date_str = "N/A"
+    #         applicants_count = 0
+
+    #         for part in parts:
+    #             part = part.strip()
+    #             if any(x in part for x in ["ago", "minute", "hour", "day", "week", "month"]):
+    #                 posted_date_str = part
+    #             elif any(x in part for x in ["applicant", "people", "apply"]):
+    #                 numbers = re.findall(r'\d+', part)
+    #                 applicants_count = int(numbers[0]) if numbers else 0
+
+    #         posted_date = parse_relative_date(posted_date_str)
+    #         job_application_url = "N/A"
+    #         apply_type = "Easy Apply" # Default
+
+    #         apply_btn = soup.find(attrs={"data-view-name": "job-apply-button"})
+
+    #         if apply_btn:
+    #             raw_url = apply_btn.get('href', '')
+    #             btn_text = apply_btn.get_text(separator=" ").strip().lower()
+    #             if "easy apply" in btn_text:
+    #                 apply_type = "Easy Apply"
+    #                 job_application_url = raw_url
+    #             else:
+    #                 apply_type = "External Apply"
+    #                 if "url=" in raw_url:
+    #                     try:
+    #                         job_application_url = unquote(raw_url.split("url=")[1].split("&")[0])
+    #                     except:
+    #                         job_application_url = raw_url
+    #                 else:
+    #                     job_application_url = raw_url
+
+    #         job_details = {
+    #             "job_id": job_id,
+    #             "job_title": job_title,
+    #             "company_name": company_name,
+    #             "company_linkedin_url": company_linkedin_url,
+    #             "posted_date": posted_date,
+    #             "applicants_count": applicants_count,
+    #             "description": description,
+    #             "url": url,
+    #             "apply_type": apply_type,
+    #             "job_application_url": job_application_url
+    #         }
+            
+    #         logging.info(f"Successfully extracted details for {job_title}")
+    #         return job_details
+
+    #     except TimeoutException:
+    #         logging.error(f"Timeout: Page for Job ID {job_id} did not load correctly.")
+    #         return None
+    #     except Exception as e:
+    #         logging.error(f"Error parsing Job ID {job_id}: {e}")
+    #         return None
 
     
     def find_jobs(self, scraper_input: ScraperInput) -> JobResponse:

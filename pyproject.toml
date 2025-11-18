@@ -10,12 +10,11 @@ authors = [
 ]
 description = "Job Application Automation"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.9"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
 ]
@@ -28,7 +27,9 @@ dependencies = [
     "oauth2client",
     "webdriver-manager",
     "PyPDF2",
-    "pandas"
+    "pandas",
+    "google-api-python-client",
+    "pypdf"
 ]
 
 [dependency-groups]
@@ -48,5 +49,9 @@ test = [
 
 
 [project.urls]
-Homepage = "https://github.com/Insticator/coolai-elt" 
-Repository = "https://github.com/Insticator/coolai-elt"
+Homepage = "https://github.com/birehan/job-agent" 
+Repository = "https://github.com/birehan/job-agent"
+
+[tool.setuptools.packages.find]
+include = ["job_agent*"]
+exclude = ["data*", "tests*"]
