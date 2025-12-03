@@ -189,7 +189,7 @@ def main():
                 is_remote=True,
                 easy_apply=False,
                 hours_old=24,
-                results_wanted=10,
+                results_wanted=5,
                 experience_level=[ExperienceLevel.ENTRY_LEVEL, ExperienceLevel.ASSOCIATE, ExperienceLevel.MID_SENIOR_LEVEL]
             )
             
